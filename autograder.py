@@ -13,9 +13,10 @@ class MASMAutograder:
         self.masm_bin = os.path.join(self.masm_dir, "BIN")
         self.df = pd.DataFrame(columns=["student_id", "marks_awarded", "comments"])
         
-    def add_entry(self, student_id, marks_awarded, comments):
+    def add_entry(self, student_id, question, marks_awarded, comments):
         new_entry = pd.DataFrame({
             'student_id': [student_id],
+            'question': [question],  # Track question number
             'marks_awarded': [marks_awarded],
             'comments': [comments]
         })
@@ -94,8 +95,8 @@ class MASMAutograder:
                 
             # check if files were created using short name
             short_basename = os.path.splitext(short_name)[0]
-            obj_file = os.path.join(self.masm_bin, f"{short_basename}.OBJ")
-            exe_file = os.path.join(self.masm_bin, f"{short_basename}.EXE")
+            obj_file = os.path.join(self.masm_bin, f"{short_basename.upper()}.OBJ")
+            exe_file = os.path.join(self.masm_bin, f"{short_basename.upper()}.EXE")
             
             print(f"Checking for OBJ file: {obj_file}")
             print(f"OBJ file exists: {os.path.exists(obj_file)}")
@@ -128,7 +129,7 @@ class MASMAutograder:
             original_name = os.path.basename(original_asm_file)
             short_name = self.get_short_name(original_name)
             exe_filename = f"{os.path.splitext(short_name)[0]}.EXE"
-            exe_path = os.path.join(self.masm_bin, exe_filename)
+            exe_path = os.path.join(self.masm_bin, exe_filename.upper())
 
             print(f"[DEBUG] Testing EXE: {exe_path}")
             if not os.path.exists(exe_path):
@@ -165,7 +166,7 @@ class MASMAutograder:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=15,
+                timeout=5,
                 text=True
             )
 
@@ -202,7 +203,7 @@ class MASMAutograder:
     def clean_output(self, output):
         """Cleans the program output with multiple normalization steps"""
         # convert to uppercase for case-insensitive comparison
-        cleaned = output.upper()
+        cleaned = output
         
         # remove DOS-specific characters and extra whitespace
         cleaned = cleaned.replace('\r', '')  # Remove carriage returns
@@ -221,13 +222,13 @@ class MASMAutograder:
         return cleaned
 
     def extract_student_id(self, filename):
-        """Extract student ID from filename like 'Q1_2023A7PS0334G.asm'"""
-        # regular expression to find ID pattern (assuming IDs like 2023A7PS0334G)
-        match = re.search(r'(\d{4}[A-Z]\d[A-Z]{2}\d{4}[A-Z])', filename)
+        """Improved ID extraction from filename"""
+        # Match ID pattern after Q1_/Q2_ prefix
+        match = re.search(r'Q\d_(\d{4}[A-Z]\d[A-Z]{2}\d{4}[A-Z])', filename, re.IGNORECASE)
         if match:
             return match.group(1)
-        # if no match, just return filename without extension
-        return os.path.splitext(filename)[0]
+        # Fallback to filename without question prefix
+        return os.path.splitext(filename.split('_', 1)[-1])[0]
 
 
 
@@ -262,7 +263,7 @@ class MASMAutograder:
         
         # cleanup EXE file after all tests
         exe_base = os.path.splitext(self.get_short_name(os.path.basename(asm_file)))[0]
-        exe_path = os.path.join(self.masm_bin, f"{exe_base}.EXE")
+        exe_path = os.path.join(self.masm_bin, f"{exe_base.upper()}.EXE")
         if os.path.exists(exe_path):
             try:
                 os.remove(exe_path)
@@ -272,33 +273,50 @@ class MASMAutograder:
                 
         return marks_awarded, "; ".join(comments)
 
-    def grade_all_submissions(self, submissions_dir, testcases_file):
-        """Grades all submissions in a directory"""
-        # load testcases
-        with open(testcases_file, 'r') as f:
-            testcases = json.load(f)
-            
-        # process all subdirectories
+    def grade_all_submissions(self, submissions_dir, q1_testcases_file, q2_testcases_file):
+        """Grades all submissions with separate test cases for Q1/Q2"""
+        # Load both test case files
+        with open(q1_testcases_file, 'r') as f:
+            q1_testcases = json.load(f)
+        with open(q2_testcases_file, 'r') as f:
+            q2_testcases = json.load(f)
+
+        # Process all subdirectories
         for root, dirs, files in os.walk(submissions_dir):
             for file in files:
                 if file.endswith(('.asm', '.ASM')):
                     asm_file = os.path.join(root, file)
                     student_id = self.extract_student_id(file)
                     
-                    print(f"Grading submission: {asm_file}")
-                    print(f"Student ID: {student_id}")
-                    
+                    # Determine question and test cases
+                    if file.upper().startswith('Q1_'):
+                        question = 'Q1'
+                        testcases = q1_testcases
+                    elif file.upper().startswith('Q2_'):
+                        question = 'Q2'
+                        testcases = q2_testcases
+                    else:
+                        continue
+
+                    print(f"\nGrading {file} for {student_id}")
                     marks, comments = self.grade_submission(asm_file, testcases)
-                    self.add_entry(student_id, marks, comments)
-                    
-        # save results
-        self.df.to_csv('grading_results.csv', index=False)
-        print(f"Grading complete! Results saved to grading_results.csv")
+                    self.add_entry(student_id, question, marks, comments)  # Include question info
+
+        # Save separate CSV files for Q1 and Q2
+        q1_df = self.df[self.df['question'] == 'Q1'].drop(columns=['question'])
+        q2_df = self.df[self.df['question'] == 'Q2'].drop(columns=['question'])
+        
+        q1_df.to_csv('q1_grading_results.csv', index=False)
+        q2_df.to_csv('q2_grading_results.csv', index=False)
+        
+        print("Grading complete! Separate results saved to:")
+        print("- q1_grading_results.csv")
+        print("- q2_grading_results.csv")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python masm_autograder.py <submissions directory> <testcases.json>")
+    if len(sys.argv) != 4:
+        print("Usage: python masm_autograder.py <submissions_dir> <q1_testcases.json> <q2_testcases.json>")
         sys.exit(1)
         
     grader = MASMAutograder()
-    grader.grade_all_submissions(sys.argv[1], sys.argv[2])
+    grader.grade_all_submissions(sys.argv[1], sys.argv[2], sys.argv[3])
